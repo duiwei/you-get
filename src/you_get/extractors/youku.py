@@ -41,17 +41,27 @@ class Youku(VideoExtractor):
     mobile_ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/60.0.3112.101 Safari/537.36'
     dispatcher_url = 'vali.cp31.ott.cibntv.net'
 
-    # Last updated: 2015-11-24
+    # Last updated: 2017-10-13
     stream_types = [
-        {'id': 'mp4hd3', 'alias-of': 'hd3'},
-        {'id': 'hd3',    'container': 'flv', 'video_profile': '1080P'},
-        {'id': 'mp4hd2', 'alias-of': 'hd2'},
-        {'id': 'hd2',    'container': 'flv', 'video_profile': '超清'},
-        {'id': 'mp4hd',  'alias-of': 'mp4'},
-        {'id': 'mp4',    'container': 'mp4', 'video_profile': '高清'},
-        {'id': 'flvhd',  'container': 'flv', 'video_profile': '标清'},
-        {'id': 'flv',    'container': 'flv', 'video_profile': '标清'},
-        {'id': '3gphd',  'container': 'mp4', 'video_profile': '标清（3GP）'},
+        {'id': 'hd3',      'container': 'flv', 'video_profile': '1080P'},
+        {'id': 'hd3v2',    'container': 'flv', 'video_profile': '1080P'},
+        {'id': 'mp4hd3',   'container': 'mp4', 'video_profile': '1080P'},
+        {'id': 'mp4hd3v2', 'container': 'mp4', 'video_profile': '1080P'},
+
+        {'id': 'hd2',      'container': 'flv', 'video_profile': '超清'},
+        {'id': 'hd2v2',    'container': 'flv', 'video_profile': '超清'},
+        {'id': 'mp4hd2',   'container': 'mp4', 'video_profile': '超清'},
+        {'id': 'mp4hd2v2', 'container': 'mp4', 'video_profile': '超清'},
+
+        {'id': 'mp4hd',    'container': 'mp4', 'video_profile': '高清'},
+        # not really equivalent to mp4hd
+        {'id': 'flvhd',    'container': 'flv', 'video_profile': '渣清'},
+        {'id': '3gphd',    'container': 'mp4', 'video_profile': '渣清'},
+
+        {'id': 'mp4sd',    'container': 'mp4', 'video_profile': '标清'},
+        # obsolete?
+        {'id': 'flv',      'container': 'flv', 'video_profile': '标清'},
+        {'id': 'mp4',      'container': 'mp4', 'video_profile': '标清'},
     ]
 
     def __init__(self):
@@ -62,12 +72,16 @@ class Youku(VideoExtractor):
 
         self.page = None
         self.video_list = None
+        self.video_next = None
         self.password = None
         self.api_data = None
         self.api_error_code = None
         self.api_error_msg = None
 
-        self.ccode = '0401'
+        self.ccode = '0519'
+        # Found in http://g.alicdn.com/player/ykplayer/0.5.64/youku-player.min.js
+        # grep -oE '"[0-9a-zA-Z+/=]{256}"' youku-player.min.js
+        self.ckey = 'DIl58SLFxFNndSV1GFNnMQVYkx1PP5tKe1siZu/86PR1u/Wh1Ptd+WOZsHHWxysSfAOhNJpdVWsdVJNsfJ8Sxd8WKVvNfAS8aS8fAOzYARzPyPc3JvtnPHjTdKfESTdnuTW6ZPvk2pNDh4uFzotgdMEFkzQ5wZVXl2Pf1/Y6hLK0OnCNxBj3+nb0v72gZ6b0td+WOZsHHWxysSo/0y9D2K42SaB8Y/+aD2K42SaB8Y/+ahU+WOZsHcrxysooUeND'
         self.utid = None
 
     def youku_ups(self):
@@ -75,6 +89,7 @@ class Youku(VideoExtractor):
         url += '&client_ip=192.168.1.1'
         url += '&utid=' + self.utid
         url += '&client_ts=' + str(int(time.time()))
+        url += '&ckey=' + urllib.parse.quote(self.ckey)
         if self.password_protected:
             url += '&password=' + self.password
         headers = dict(Referer=self.referer)
@@ -89,6 +104,8 @@ class Youku(VideoExtractor):
         if 'videos' in self.api_data:
             if 'list' in self.api_data['videos']:
                 self.video_list = self.api_data['videos']['list']
+            if 'next' in self.api_data['videos']:
+                self.video_next = self.api_data['videos']['next']
 
     @classmethod
     def change_cdn(cls, url):
@@ -141,13 +158,14 @@ class Youku(VideoExtractor):
                     log.wtf('Cannot fetch vid')
 
         if kwargs.get('src') and kwargs['src'] == 'tudou':
-            self.ccode = '0402'
+            self.ccode = '0512'
 
         if kwargs.get('password') and kwargs['password']:
             self.password_protected = True
             self.password = kwargs['password']
 
         self.utid = fetch_cna()
+        time.sleep(3)
         self.youku_ups()
 
         if self.api_data.get('stream') is None:
@@ -230,12 +248,24 @@ def youku_download_playlist_by_url(url, **kwargs):
         youku_obj = Youku()
         youku_obj.url = url
         youku_obj.prepare(**kwargs)
+        total_episode = None
+        try:
+            total_episode = youku_obj.api_data['show']['episode_total']
+        except KeyError:
+            log.wtf('Cannot get total_episode for {}'.format(url))
+        next_vid = youku_obj.vid
+        for _ in range(total_episode):
+            this_extractor = Youku()
+            this_extractor.download_by_vid(next_vid, keep_obj=True, **kwargs)
+            next_vid = this_extractor.video_next['encodevid']
+        '''
         if youku_obj.video_list is None:
             log.wtf('Cannot find video list for {}'.format(url))
         else:
             vid_list = [v['encodevid'] for v in youku_obj.video_list]
             for v in vid_list:
-                youku_obj.download_by_vid(v, **kwargs)
+                Youku().download_by_vid(v, **kwargs)
+        '''
 
     elif re.match('https?://list.youku.com/show/id_', url):
         # http://list.youku.com/show/id_z2ae8ee1c837b11e18195.html
